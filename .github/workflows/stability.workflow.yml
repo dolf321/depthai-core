@@ -22,7 +22,7 @@ jobs:
 
   # Testing
   test:
-    runs-on: ['self-hosted', 'stability', 'linux']
+    runs-on: ['self-hosted', 'hil-stability', 'linux']
 
     steps:
     - name: Cache .hunter folder
@@ -38,10 +38,19 @@ jobs:
     # - name: Specify ASAN toolchain path
     #   run: echo "CMAKE_TOOLCHAIN_PATH=$PWD/cmake/toolchain/asan.cmake" >> $GITHUB_ENV
 
+    # - name: Configure, Build and Test
+    #   if: matrix.os == 'linux'
+    #   run: |
+    #     cmake -S . -B build -D CMAKE_BUILD_TYPE=Release -D HUNTER_ROOT=$HOME/.hun_vanilla -D DEPTHAI_BUILD_TESTS=ON
+    #     cmake --build build --parallel 8 --config Release --target stability_stress_test
+    #     cd build
+    #     ../ci/stability_stress_test_combined.sh
+
+    # TMP - USB stability only, 5min(*60s)
     - name: Configure, Build and Test
       if: matrix.os == 'linux'
       run: |
         cmake -S . -B build -D CMAKE_BUILD_TYPE=Release -D HUNTER_ROOT=$HOME/.hun_vanilla -D DEPTHAI_BUILD_TESTS=ON
         cmake --build build --parallel 8 --config Release --target stability_stress_test
         cd build
-        ../ci/stability_stress_test_combined.sh
+        ../ci/stability_stress_test_usb.sh 300
