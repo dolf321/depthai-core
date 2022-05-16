@@ -151,6 +151,13 @@ hunter_private_data(
     FILE "text-image-super-resolution-0001_2021.4_4shave.blob"
     LOCATION openvino_2021_4_blob
 )
+# YoloV4 resource
+hunter_private_data(
+    URL "https://artifacts.luxonis.com/artifactory/luxonis-depthai-data-local/network/yolo-v4-tiny-tf_openvino_2021.4_6shave.blob"
+    SHA1 "d8d09b697dac298fe83cf8856740a21b1a61ab89"
+    FILE "yolo-v4-tiny-tf_openvino_2021.4_6shave.blob"
+    LOCATION tiny_yolo_v4_blob
+)
 
 
 # Add tests
@@ -198,3 +205,20 @@ dai_test_compile_definitions(filesystem_test_20 PRIVATE BLOB_PATH="${mobilenet_b
 
 # Bootloader version tests
 dai_add_test(bootloader_version_test src/bootloader_version_test.cpp)
+
+# Stability stress test (OAK-D oriented USB/PoE)
+# TODO
+# # dai_add_test(stability_stress_test src/stability_stress_test.cpp)
+
+add_executable(stability_stress_test src/stability_stress_test.cpp)
+add_default_flags(stability_stress_test LEAN)
+if(COMMAND target_clangformat_setup)
+    target_clangformat_setup(stability_stress_test "")
+endif()
+# target_link_libraries(stability_stress_test PRIVATE depthai::core Catch2::Catch2)
+target_link_libraries(stability_stress_test PRIVATE depthai::opencv Catch2::Catch2 opencv_highgui)
+add_test(stability_stress_test stability_stress_test)
+add_test(stability_stress_test_poe stability_stress_test)
+set_tests_properties(stability_stress_test PROPERTIES ENVIRONMENT "UBSAN_OPTIONS=halt_on_error=1;DEPTHAI_PROTOCOL=usb" LABELS stability_usb)
+set_tests_properties(stability_stress_test_poe PROPERTIES ENVIRONMENT "UBSAN_OPTIONS=halt_on_error=1;DEPTHAI_PROTOCOL=poe" LABELS stability_poe)
+target_compile_definitions(stability_stress_test PRIVATE BLOB_PATH="${tiny_yolo_v4_blob}")

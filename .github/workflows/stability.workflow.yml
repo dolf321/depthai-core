@@ -1,0 +1,49 @@
+name: DepthAI Core HIL Stability
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - develop
+    tags:
+      - 'v*'
+  pull_request:
+    branches:
+      - main
+      - develop
+
+# Only allow latest run on same branch to be tested
+concurrency:
+  group: ci-stability-${{ github.ref }}-1
+  cancel-in-progress: true
+
+jobs:
+
+  # Testing
+  test:
+    runs-on: ['self-hosted', 'stability', 'linux']
+
+    steps:
+    - name: Cache .hunter folder
+      uses: actions/cache@v2
+      with:
+        path: $HOME/.hun_vanilla
+        key: hunter-linux-stability-vanilla
+    - uses: actions/checkout@v2
+      with:
+        submodules: 'recursive'
+
+    # TODO also modify above hunter key to 'asan'
+    # - name: Specify ASAN toolchain path
+    #   run: echo "CMAKE_TOOLCHAIN_PATH=$PWD/cmake/toolchain/asan.cmake" >> $GITHUB_ENV
+
+    - name: Configure, Build and Test
+      if: matrix.os == 'linux'
+      run: |
+        export DISPLAY=:99
+        xdpyinfo -display $DISPLAY >/dev/null 2>&1 || (Xvfb $DISPLAY &)
+        cmake -S . -B build -D CMAKE_BUILD_TYPE=Release -D HUNTER_ROOT=$HOME/.hun_vanilla -D DEPTHAI_BUILD_TESTS=ON -D DEPTHAI_TEST_EXAMPLES=ON
+        cmake --build build --parallel 8 --config Release
+        cd build
+        ctest -C Release --output-on-failure -L stability
