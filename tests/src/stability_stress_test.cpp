@@ -1,9 +1,15 @@
+// std
 #include <csignal>
 #include <iostream>
+#include <unordered_map>
+#include <chrono>
 
 // Includes common necessary includes for development using depthai library
 #include "depthai/depthai.hpp"
+
+#ifdef DEPTHAI_STABILITY_TEST_DEBUG
 #include <opencv2/opencv.hpp>
+#endif
 
 static const std::vector<std::string> labelMap = {
     "person",        "bicycle",      "car",           "motorbike",     "aeroplane",   "bus",         "train",       "truck",        "boat",
@@ -29,9 +35,14 @@ int main(int argc, char** argv) {
 
     std::string nnPath(BLOB_PATH);
 
-    // If path to blob specified, use that
+    // // If path to blob specified, use that
+    // if(argc > 1) {
+    //     nnPath = std::string(argv[1]);
+    // }
+
+    seconds TEST_TIMEOUT{24*60*60};
     if(argc > 1) {
-        nnPath = std::string(argv[1]);
+        TEST_TIMEOUT = seconds{stoi(argv[1])};
     }
 
     // Create pipeline
@@ -50,6 +61,10 @@ int main(int argc, char** argv) {
     auto edgeDetectorRight = pipeline.create<dai::node::EdgeDetector>();
     auto edgeDetectorRgb = pipeline.create<dai::node::EdgeDetector>();
 
+    // TODO(themarpe) - enable specific parts separatelly, to control load
+    // auto featureTrackerLeft = pipeline.create<dai::node::FeatureTracker>();
+    // auto featureTrackerRight = pipeline.create<dai::node::FeatureTracker>();
+
     auto ve1Out = pipeline.create<dai::node::XLinkOut>();
     auto ve2Out = pipeline.create<dai::node::XLinkOut>();
     auto ve3Out = pipeline.create<dai::node::XLinkOut>();
@@ -60,6 +75,10 @@ int main(int argc, char** argv) {
     auto xoutEdgeLeft = pipeline.create<dai::node::XLinkOut>();
     auto xoutEdgeRight = pipeline.create<dai::node::XLinkOut>();
     auto xoutEdgeRgb = pipeline.create<dai::node::XLinkOut>();
+
+    // auto xoutTrackedFeaturesLeft = pipeline.create<dai::node::XLinkOut>();
+    // auto xoutTrackedFeaturesRight = pipeline.create<dai::node::XLinkOut>();
+
     ve1Out->setStreamName("ve1Out");
     ve2Out->setStreamName("ve2Out");
     ve3Out->setStreamName("ve3Out");
@@ -74,6 +93,9 @@ int main(int argc, char** argv) {
     xoutEdgeLeft->setStreamName(edgeLeftStr);
     xoutEdgeRight->setStreamName(edgeRightStr);
     xoutEdgeRgb->setStreamName(edgeRgbStr);
+
+    // xoutTrackedFeaturesLeft->setStreamName("trackedFeaturesLeft");
+    // xoutTrackedFeaturesRight->setStreamName("trackedFeaturesRight");
 
 
     // Properties
@@ -115,6 +137,13 @@ int main(int argc, char** argv) {
 
     edgeDetectorRgb->setMaxOutputFrameSize(8294400);
 
+    // // By default the least mount of resources are allocated
+    // // increasing it improves performance when optical flow is enabled
+    // auto numShaves = 2;
+    // auto numMemorySlices = 2;
+    // featureTrackerLeft->setHardwareResources(numShaves, numMemorySlices);
+    // featureTrackerRight->setHardwareResources(numShaves, numMemorySlices);
+
     // Linking
     monoLeft->out.link(ve1->input);
     camRgb->video.link(ve2->input);
@@ -140,6 +169,12 @@ int main(int argc, char** argv) {
     camRgb->video.link(edgeDetectorRgb->inputImage);
     edgeDetectorLeft->outputImage.link(xoutEdgeLeft->input);
     edgeDetectorRight->outputImage.link(xoutEdgeRight->input);
+
+    // monoLeft->out.link(featureTrackerLeft->inputImage);
+    // featureTrackerLeft->outputFeatures.link(xoutTrackedFeaturesLeft->input);
+    // monoRight->out.link(featureTrackerRight->inputImage);
+    // featureTrackerRight->outputFeatures.link(xoutTrackedFeaturesRight->input);
+
     // Do not send out rgb edge
     // edgeDetectorRgb->outputImage.link(xoutEdgeRgb->input);
 
@@ -158,10 +193,62 @@ int main(int argc, char** argv) {
     auto edgeRightQueue = device.getOutputQueue(edgeRightStr, 8, false);
     auto edgeRgbQueue = device.getOutputQueue(edgeRgbStr, 8, false);
 
+    // auto outputFeaturesLeftQueue = device.getOutputQueue("trackedFeaturesLeft", 8, false);
+    // auto outputFeaturesRightQueue = device.getOutputQueue("trackedFeaturesRight", 8, false);
+
+#ifdef DEPTHAI_STABILITY_TEST_DEBUG
     auto startTime = steady_clock::now();
     int counter = 0;
     float fps = 0;
     auto color = cv::Scalar(255, 255, 255);
+#endif
+
+
+    mutex countersMtx;
+    unordered_map<std::string, int> counters;
+
+    thread countingThread([&countersMtx, &counters, &device, TEST_TIMEOUT](){
+        // Initial delay
+        this_thread::sleep_for(5s);
+
+        auto timeoutStopwatch = steady_clock::now();
+        auto fiveFpsCounter = steady_clock::now();
+        while(alive) {
+            if(steady_clock::now() - fiveFpsCounter >= 5s) {
+                unique_lock<mutex> l(countersMtx);
+
+                bool failed = counters.size() == 0;
+                cout << "[" << duration_cast<seconds>(steady_clock::now() - timeoutStopwatch).count() << "s] " << "FPS: ";
+                for(const auto& kv : counters){
+                    if(kv.second == 0){
+                        failed = true;
+                    }
+
+                    cout << kv.first << ": " << kv.second / 5.0f << ", ";
+                }
+                cout << "\n";
+
+                if(failed) {
+                    cout << "Didn't recieve enough frames in time...\n";
+                    exit(1);
+                }
+
+                counters = {};
+                fiveFpsCounter = steady_clock::now();
+            }
+
+            if(steady_clock::now() - timeoutStopwatch > TEST_TIMEOUT){
+                alive = false;
+                break;
+            }
+
+            this_thread::sleep_for(500ms);
+        }
+
+        // give 5s for graceful shutdown
+        this_thread::sleep_for(5s);
+        device.close();
+    });
 
     while(alive) {
         auto out1 = outQ1->getAll<dai::ImgFrame>();
@@ -175,6 +262,24 @@ int main(int argc, char** argv) {
         auto edgeRights = edgeRightQueue->getAll<dai::ImgFrame>();
         // auto edgeRgbs = edgeRgbQueue->getAll<dai::ImgFrame>();
 
+        // auto trackedLefts = outputFeaturesLeftQueue->getAll<dai::TrackedFeatures>();
+        // auto trackedRigths = outputFeaturesRightQueue->getAll<dai::TrackedFeatures>();
+
+        {
+            unique_lock<mutex> l(countersMtx);
+            counters["out1"] += out1.size();
+            counters["out2"] += out2.size();
+            counters["out3"] += out3.size();
+            counters["imgFrame"]++;
+            counters["inDet"]++;
+            counters["depth"]++;
+            counters["edgeLefts"] += edgeLefts.size();
+            counters["edgeRights"] += edgeRights.size();
+            // counters["trackedLefts"] += trackedLefts.size();
+            // counters["trackedRights"] += trackedRigths.size();
+        }
+
+        #ifdef DEPTHAI_STABILITY_TEST_DEBUG
 
         /// DISPLAY & OPENCV Section
         for(const auto& edgeLeft : edgeLefts) {
@@ -189,6 +294,9 @@ int main(int argc, char** argv) {
         //     cv::Mat edgeRgbFrame = edgeRgb->getFrame();
         //     cv::imshow(edgeRgbStr, edgeRgbFrame);
         // }
+
+
+
 
         cv::Mat frame = imgFrame->getCvFrame();
         cv::Mat depthFrame = depth->getFrame();  // depthFrame values are in millimeters
@@ -264,11 +372,17 @@ int main(int argc, char** argv) {
 
         int key = cv::waitKey(1);
         if(key == 'q' || key == 'Q') {
-            return 0;
+            alive = false;
+            break;
         }
 
+        #endif
 
     }
+
+    // Clean up the counting thread
+    alive = false;
+    if(countingThread.joinable()) countingThread.join();
 
     return 0;
 }
