@@ -445,7 +445,7 @@ if(DEPTHAI_OPENCV_SUPPORT)
             set(OPENCV_SUPPORT_AVAILABLE FALSE)
         endif()
     endforeach()
-
+    set(OPENCV_SUPPORT_AVAILABLE FALSE)
     if(OPENCV_SUPPORT_AVAILABLE)
 
         # Add depthai-core-opencv library and depthai::core::opencv alias
@@ -462,7 +462,7 @@ if(DEPTHAI_OPENCV_SUPPORT)
         target_link_libraries(${TARGET_OPENCV_NAME} PUBLIC ${REQUIRED_OPENCV_LIBRARIES} ${THIRDPARTY_OPENCV_LIBRARIES})
 
         # Add public compile definition indicating that OpenCV support is available
-        set(DEPTHAI_HAVE_OPENCV_SUPPORT ON)
+        set(DEPTHAI_HAVE_OPENCV_SUPPORT OFF)
 
         # Specify that we are building target opencv
         target_compile_definitions(${TARGET_OPENCV_NAME} PUBLIC DEPTHAI_TARGET_OPENCV)
