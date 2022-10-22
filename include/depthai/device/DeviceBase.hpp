@@ -18,12 +18,14 @@
 #include "depthai/common/CameraBoardSocket.hpp"
 #include "depthai/common/UsbSpeed.hpp"
 #include "depthai/device/CalibrationHandler.hpp"
+#include "depthai/device/Version.hpp"
 #include "depthai/openvino/OpenVINO.hpp"
 #include "depthai/utility/Pimpl.hpp"
 #include "depthai/xlink/XLinkConnection.hpp"
 #include "depthai/xlink/XLinkStream.hpp"
 
 // shared
+#include "depthai-shared/common/CameraFeatures.hpp"
 #include "depthai-shared/common/ChipTemperature.hpp"
 #include "depthai-shared/common/CpuUsage.hpp"
 #include "depthai-shared/common/MemoryInfo.hpp"
@@ -49,6 +51,12 @@ class DeviceBase {
     static constexpr float DEFAULT_SYSTEM_INFORMATION_LOGGING_RATE_HZ{1.0f};
     /// Default UsbSpeed for device connection
     static constexpr UsbSpeed DEFAULT_USB_SPEED{UsbSpeed::SUPER};
+    /// Default Timesync period
+    static constexpr std::chrono::milliseconds DEFAULT_TIMESYNC_PERIOD{5000};
+    /// Default Timesync number of samples per sync
+    static constexpr int DEFAULT_TIMESYNC_NUM_SAMPLES{10};
+    /// Default Timesync packet interval randomness
+    static constexpr bool DEFAULT_TIMESYNC_RANDOM{true};
 
     // Structures
 
@@ -75,8 +83,7 @@ class DeviceBase {
      * @param timeout duration of time to wait for the any device
      * @returns Tuple of bool and DeviceInfo. Bool specifies if device was found. DeviceInfo specifies the found device
      */
-    template <typename Rep, typename Period>
-    static std::tuple<bool, DeviceInfo> getAnyAvailableDevice(std::chrono::duration<Rep, Period> timeout);
+    static std::tuple<bool, DeviceInfo> getAnyAvailableDevice(std::chrono::milliseconds timeout);
 
     /**
      * Gets any available device
@@ -84,6 +91,15 @@ class DeviceBase {
      * @returns Tuple of bool and DeviceInfo. Bool specifies if device was found. DeviceInfo specifies the found device
      */
     static std::tuple<bool, DeviceInfo> getAnyAvailableDevice();
+
+    /**
+     * Waits for any available device with a timeout
+     *
+     * @param timeout duration of time to wait for the any device
+     * @param cb callback function called between pooling intervals
+     * @returns Tuple of bool and DeviceInfo. Bool specifies if device was found. DeviceInfo specifies the found device
+     */
+    static std::tuple<bool, DeviceInfo> getAnyAvailableDevice(std::chrono::milliseconds timeout, std::function<void()> cb);
 
     /**
      * Gets first available device. Device can be either in XLINK_UNBOOTED or XLINK_BOOTLOADER state
@@ -99,10 +115,18 @@ class DeviceBase {
     static std::tuple<bool, DeviceInfo> getDeviceByMxId(std::string mxId);
 
     /**
-     * Returns all connected devices
-     * @returns Vector of connected devices
+     * Returns all available devices
+     * @returns Vector of available devices
      */
     static std::vector<DeviceInfo> getAllAvailableDevices();
+
+    /**
+     * Returns information of all connected devices.
+     * The devices could be both connectable as well as already connected to devices.
+     *
+     * @returns Vector of connected device information
+     */
+    static std::vector<DeviceInfo> getAllConnectedDevices();
 
     /**
      * Gets device firmware binary for a specific OpenVINO version
@@ -182,7 +206,7 @@ class DeviceBase {
 
     /**
      * Connects to any available device with a DEFAULT_SEARCH_TIME timeout.
-     * Uses OpenVINO version Pipeline::DEFAULT_OPENVINO_VERSION
+     * Uses OpenVINO version OpenVINO::DEFAULT_VERSION
      */
     DeviceBase();
 
@@ -261,10 +285,34 @@ class DeviceBase {
     DeviceBase(Config config, const DeviceInfo& devInfo);
 
     /**
+     * Connects to any available device with a DEFAULT_SEARCH_TIME timeout.
+     * Uses OpenVINO version OpenVINO::DEFAULT_VERSION
+     *
+     * @param devInfo DeviceInfo which specifies which device to connect to
+     */
+    DeviceBase(const DeviceInfo& devInfo);
+
+    /**
+     * Connects to any available device with a DEFAULT_SEARCH_TIME timeout.
+     * Uses OpenVINO version OpenVINO::DEFAULT_VERSION
+     *
+     * @param devInfo DeviceInfo which specifies which device to connect to
+     * @param maxUsbSpeed Maximum allowed USB speed
+     */
+    DeviceBase(const DeviceInfo& devInfo, UsbSpeed maxUsbSpeed);
+
+    /**
      * Device destructor
      * @note In the destructor of the derived class, remember to call close()
      */
     virtual ~DeviceBase();
+
+    /**
+     * Gets Bootloader version if it was booted through Bootloader
+     *
+     * @returns DeviceBootloader::Version if booted through Bootloader or none otherwise
+     */
+    tl::optional<Version> getBootloaderVersion();
 
     /**
      * Checks if devices pipeline is already running
@@ -417,6 +465,13 @@ class DeviceBase {
     std::vector<CameraBoardSocket> getConnectedCameras();
 
     /**
+     * Get cameras that are connected to the device with their features/properties
+     *
+     * @returns Vector of connected camera features
+     */
+    std::vector<CameraFeatures> getConnectedCameraFeatures();
+
+    /**
      * Get sensor names for cameras that are connected to the device
      *
      * @returns Map/dictionary with camera sensor names, indexed by socket
@@ -536,6 +591,24 @@ class DeviceBase {
     void flashFactoryCalibration(CalibrationHandler calibrationHandler);
 
     /**
+     * Destructive action, deletes User area EEPROM contents
+     * Requires PROTECTED permissions
+     *
+     * @throws std::runtime_exception if failed to flash the calibration
+     * @return True on successful flash, false on failure
+     */
+    void flashEepromClear();
+
+    /**
+     * Destructive action, deletes Factory area EEPROM contents
+     * Requires FACTORY PROTECTED permissions
+     *
+     * @throws std::runtime_exception if failed to flash the calibration
+     * @return True on successful flash, false on failure
+     */
+    void flashFactoryEepromClear();
+
+    /**
      * Fetches the EEPROM data from Factory area and loads it into CalibrationHandler object
      *
      * @throws std::runtime_exception if no calibration is flashed
@@ -552,11 +625,38 @@ class DeviceBase {
     CalibrationHandler readFactoryCalibrationOrDefault();
 
     /**
+     * Fetches the raw EEPROM data from User area
+     *
+     * @throws std::runtime_exception if any error occured
+     * @returns Binary dump of User area EEPROM data
+     */
+    std::vector<std::uint8_t> readCalibrationRaw();
+
+    /**
+     * Fetches the raw EEPROM data from Factory area
+     *
+     * @throws std::runtime_exception if any error occured
+     * @returns Binary dump of Factory area EEPROM data
+     */
+    std::vector<std::uint8_t> readFactoryCalibrationRaw();
+
+    /**
      * Retrieves USB connection speed
      *
      * @returns USB connection speed of connected device if applicable. Unknown otherwise.
      */
     UsbSpeed getUsbSpeed();
+
+    /**
+     * Configures Timesync service on device. It keeps host and device clocks in sync
+     * First time timesync is started it waits until the initial sync is completed
+     * Afterwards the function changes the following parameters
+     *
+     * @param period Interval between timesync runs
+     * @param numSamples Number of timesync samples per run which are used to compute a better value. Set to zero to disable timesync
+     * @param random If true partial timesync requests will be performed at random intervals, otherwise at fixed intervals
+     */
+    void setTimesync(std::chrono::milliseconds period, int numSamples, bool random);
 
     /**
      * Explicitly closes connection to device.
@@ -625,6 +725,7 @@ class DeviceBase {
     void tryGetDevice();
 
     DeviceInfo deviceInfo = {};
+    tl::optional<Version> bootloaderVersion;
 
     // Log callback
     int uniqueCallbackId = 0;
@@ -643,11 +744,17 @@ class DeviceBase {
     std::thread loggingThread;
     std::atomic<bool> loggingRunning{true};
 
+    // Monitor thread
+    std::thread monitorThread;
+    std::mutex lastWatchdogPingTimeMtx;
+    std::chrono::steady_clock::time_point lastWatchdogPingTime;
+
     // RPC stream
     std::unique_ptr<XLinkStream> rpcStream;
 
     // closed
-    std::atomic<bool> closed{false};
+    mutable std::mutex closedMtx;
+    bool closed{false};
 
     // pimpl
     class Impl;

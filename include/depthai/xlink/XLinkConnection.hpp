@@ -25,11 +25,23 @@ namespace dai {
  */
 struct DeviceInfo {
     DeviceInfo() = default;
-    explicit DeviceInfo(const char*);
-    explicit DeviceInfo(std::string);
-    deviceDesc_t desc = {};
-    XLinkDeviceState_t state = X_LINK_ANY_STATE;
+    DeviceInfo(std::string name, std::string mxid, XLinkDeviceState_t state, XLinkProtocol_t protocol, XLinkPlatform_t platform, XLinkError_t status);
+    /**
+     * Creates a DeviceInfo by checking whether supplied parameter is a MXID or IP/USB name
+     * @param mxidOrName Either MXID, IP Address or USB port name
+     */
+    explicit DeviceInfo(std::string mxidOrName);
+    explicit DeviceInfo(const deviceDesc_t& desc);
+    deviceDesc_t getXLinkDeviceDesc() const;
     std::string getMxId() const;
+    std::string toString() const;
+
+    std::string name = "";
+    std::string mxid = "";
+    XLinkDeviceState_t state = X_LINK_ANY_STATE;
+    XLinkProtocol_t protocol = X_LINK_ANY_PROTOCOL;
+    XLinkPlatform_t platform = X_LINK_ANY_PLATFORM;
+    XLinkError_t status = X_LINK_SUCCESS;
 };
 
 /**
@@ -38,9 +50,38 @@ struct DeviceInfo {
 class XLinkConnection {
    public:
     // static API
+
+    /**
+     * Returns information of all connected devices with given state
+     *
+     * @param state State which the devices should be in
+     * @param skipInvalidDevices whether or not to skip over devices that cannot be successfully communicated with
+     * @returns Vector of connected device information
+     */
     static std::vector<DeviceInfo> getAllConnectedDevices(XLinkDeviceState_t state = X_LINK_ANY_STATE, bool skipInvalidDevices = true);
+
+    /**
+     * Returns information of first device with given state
+     * @param state State which the device should be in
+     * @returns Device information
+     */
     static std::tuple<bool, DeviceInfo> getFirstDevice(XLinkDeviceState_t state = X_LINK_ANY_STATE, bool skipInvalidDevices = true);
-    static std::tuple<bool, DeviceInfo> getDeviceByMxId(std::string, XLinkDeviceState_t state = X_LINK_ANY_STATE, bool skipInvalidDevice = true);
+
+    /**
+     * Finds a device by MX ID. Example: 14442C10D13EABCE00
+     * @param mxId MyraidX ID which uniquely specifies a device
+     * @param state Which state should the device be in
+     * @param skipInvalidDevices Whether or not to skip devices that cannot be fully detected
+     * @returns Tuple of bool and DeviceInfo. Bool specifies if device was found. DeviceInfo specifies the found device
+     */
+    static std::tuple<bool, DeviceInfo> getDeviceByMxId(std::string mxId, XLinkDeviceState_t state = X_LINK_ANY_STATE, bool skipInvalidDevice = true);
+
+    /**
+     * Tries booting the given device into bootloader state
+     *
+     * @param devInfo Information of device which it should boot into bootloader state
+     * @returns New device information if successful
+     */
     static DeviceInfo bootBootloader(const DeviceInfo& devInfo);
 
     XLinkConnection(const DeviceInfo& deviceDesc, std::vector<std::uint8_t> mvcmdBinary, XLinkDeviceState_t expectedState = X_LINK_BOOTED);
@@ -89,11 +130,12 @@ class XLinkConnection {
     DeviceInfo deviceInfo;
 
     // closed
-    std::atomic<bool> closed{false};
+    mutable std::mutex closedMtx;
+    bool closed{false};
 
-    constexpr static std::chrono::milliseconds WAIT_FOR_BOOTUP_TIMEOUT_TCPIP{15000};
-    constexpr static std::chrono::milliseconds WAIT_FOR_BOOTUP_TIMEOUT_USB{5000};
+    constexpr static std::chrono::milliseconds WAIT_FOR_BOOTUP_TIMEOUT{15000};
     constexpr static std::chrono::milliseconds WAIT_FOR_CONNECT_TIMEOUT{5000};
+    constexpr static std::chrono::milliseconds POLLING_DELAY_TIME{10};
 };
 
 }  // namespace dai
